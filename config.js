@@ -14,11 +14,11 @@ window.CONFIG = {
 
   // Identifiant de l'onglet des points.
   // Ouvrez l'onglet dans Google Sheets et regardez la fin de l'adresse :
-  // .../edit#gid=123456789  →  recopiez 123456789 ci-dessous, entre guillemets.
-  // Tant que cette valeur vaut null, l'onglet Classement affiche un mode d'emploi.
+  // .../edit#gid=123456789  →  recopiez 123456789 ci-dessous.
+  // Mettre null ici fait afficher un mode d'emploi dans l'onglet Classement.
   gidPoints: 505040302,
 
-  // Au-delà de ce délai (en millisecondes), on renonce au Sheet et on garde
-  // la copie locale. Les visiteurs ne restent jamais bloqués sur un écran vide.
+  // Au-delà de ce délai (en millisecondes), on renonce et on affiche un
+  // message d'erreur plutôt que de laisser tourner le chargement sans fin.
   delaiMax: 8000,
 };

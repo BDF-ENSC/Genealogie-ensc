@@ -12,6 +12,20 @@
   // ---------- Mise en page des arbres ----------
   const L = { largeur: 186, hauteur: 40, ecartX: 22, ecartY: 104, ecartLignee: 1.4, marge: 90 };
   const PAS_X = L.largeur + L.ecartX;
+  const VIDE = new Set();
+
+  // Au-delà de cette distance, une courbe s'aplatit trop : le lien est alors
+  // tracé en cheminement à angles arrondis, et la carte du filleul porte un
+  // repère du côté du parrain éloigné.
+  const LIEN_TROP_LONG = 1.6;   // en colonnes
+
+  // Et au-delà de celle-ci, plus aucun tracé ne tient debout : la carte du
+  // filleul porte un repère, et le trait n'apparaît qu'à la sélection.
+  const LIEN_HORS_VUE = 6;      // en colonnes
+
+  // Quand les deux parrains se disputent la même branche, on autorise l'autre
+  // parrain à porter la lignée. Mettre à false pour figer l'ordre du Sheet.
+  const PERMUTER_PARRAIN_PORTEUR = true;
   const SEUIL_NOMS = 0.42;
   const ZOOM_MIN = 0.05, ZOOM_MAX = 2.5;
 
@@ -222,7 +236,8 @@
       fils: [], x: 0, y: (p.promo - PROMO_MIN) * L.ecartY,
     }));
 
-    // parent principal = premier parrain cité ; les autres deviennent des pointillés
+    // Le premier parrain cité porte la branche ; les suivants restent reliés
+    // sans porter la lignée — d'où le rapprochement calculé plus bas.
     const racines = [];
     noeuds.forEach(n => {
       const principal = n.parents[0];
@@ -249,17 +264,36 @@
     noeuds.forEach(n => n.fils.sort(ordre));
     racines.sort(ordre);
 
-    // Chaque sous-arbre occupe sa propre bande : aucun chevauchement possible.
-    let curseur = 0;
-    const placer = id => {
-      const n = noeuds.get(id);
-      if (!n.fils.length) { n.x = curseur; curseur += 1; return; }
-      n.fils.forEach(placer);
-      n.x = (noeuds.get(n.fils[0]).x + noeuds.get(n.fils[n.fils.length - 1]).x) / 2;
-    };
-    racines.forEach((r, i) => { if (i > 0) curseur += L.ecartLignee; placer(r); });
+    // Un second parrain pris dans une autre lignée tirerait un trait d'un bout
+    // à l'autre de l'arbre. On réordonne lignées et branches pour que les deux
+    // parrains d'une même personne se retrouvent voisins.
+    const coLiens = [];
+    noeuds.forEach(n => n.parents.forEach((pid, i) => {
+      if (i > 0 && noeuds.has(pid)) coLiens.push({ enfant: n.id, porteur: n.parents[0], second: pid });
+    }));
 
-    noeuds.forEach(n => { n.px = n.x * PAS_X; });
+    // Chaque sous-arbre occupe sa propre bande : aucun chevauchement possible.
+    // Exception : deux lignées qu'un double parrainage relie se touchent, sans
+    // la gouttière habituelle — c'est bien une seule parenté qui les traverse.
+    const voisinage = new Map();
+    const placerTout = () => {
+      let curseur = 0;
+      const placer = id => {
+        const n = noeuds.get(id);
+        if (!n.fils.length) { n.x = curseur; curseur += 1; return; }
+        n.fils.forEach(placer);
+        n.x = (noeuds.get(n.fils[0]).x + noeuds.get(n.fils[n.fils.length - 1]).x) / 2;
+      };
+      racines.forEach((r, i) => {
+        const soudee = i > 0 && (voisinage.get(r) || VIDE).has(racines[i - 1]);
+        if (i > 0 && !soudee) curseur += L.ecartLignee;
+        placer(r);
+      });
+      noeuds.forEach(n => { n.px = n.x * PAS_X; });
+    };
+    placerTout();
+    if (coLiens.length) rapprocherParrains(noeuds, racines, coLiens, ordre, placerTout, voisinage);
+
     const xs = [...noeuds.values()].map(n => n.px), ys = [...noeuds.values()].map(n => n.y);
     const res = {
       famille, noeuds, racines,
@@ -272,6 +306,260 @@
     };
     arbresCalcules.set(famille, res);
     return res;
+  }
+
+  // Rapproche les deux parrains d'une même personne, sans jamais élargir
+  // l'arbre : on ne fait que permuter des lignées et des branches entières.
+  // Les doubles parrainages sont rares (une poignée par famille), donc plutôt
+  // que de tâtonner on essaie toutes les dispositions et on garde la meilleure.
+  function rapprocherParrains(noeuds, racines, coLiens, ordre, placerTout, voisinage) {
+
+    const pere = new Map();
+    const majPere = () => {
+      pere.clear();
+      noeuds.forEach(n => n.fils.forEach(f => pere.set(f, n.id)));
+    };
+    majPere();
+
+    const chemin = id => {                       // [racine, …, id]
+      const c = [];
+      for (let cur = id, garde = 0; cur !== undefined && garde < 400; garde++) {
+        c.push(cur);
+        cur = pere.get(cur);
+      }
+      return c.reverse();
+    };
+    const descendDe = (a, b) => {
+      for (let cur = a, garde = 0; cur !== undefined && garde < 400; garde++) {
+        if (cur === b) return true;
+        cur = pere.get(cur);
+      }
+      return false;
+    };
+
+    // Quelles lignées un double parrainage relie-t-il ? À recalculer dès que la
+    // structure bouge, puisqu'un filleul peut changer de lignée.
+    const majVoisinage = () => {
+      voisinage.clear();
+      const relier = (a, b) => {
+        if (a === b || a === undefined || b === undefined) return;
+        if (!voisinage.has(a)) voisinage.set(a, new Set());
+        if (!voisinage.has(b)) voisinage.set(b, new Set());
+        voisinage.get(a).add(b);
+        voisinage.get(b).add(a);
+      };
+      coLiens.forEach(co => {
+        const re = chemin(co.enfant)[0];
+        relier(chemin(co.second)[0], re);
+        relier(chemin(co.porteur)[0], re);
+      });
+    };
+
+    // Ce qu'on cherche à raccourcir est le trait réellement tracé : du second
+    // parrain jusqu'à son filleul. Le carré pénalise fortement un trait très
+    // long, donc deux liens moyens valent mieux qu'un lien qui traverse tout.
+    const dist = (a, b) => Math.abs(noeuds.get(a).px - noeuds.get(b).px) / PAS_X;
+    const ecart = co => Math.max(dist(co.enfant, co.second), dist(co.enfant, co.porteur));
+    const cout = () => {
+      majVoisinage();
+      placerTout();
+      // Les deux traits comptent : poser le filleul entre ses parrains rallonge
+      // le lien du porteur autant qu'il raccourcit celui du second. La puissance
+      // 4 fait passer le pire trait avant tout le reste — mieux vaut deux liens
+      // moyens qu'un seul qui traverse la moitié de l'arbre.
+      return coLiens.reduce((t, co) =>
+        t + dist(co.enfant, co.second) ** 4 + dist(co.enfant, co.porteur) ** 4, 0);
+    };
+
+    const copier = () => ({
+      f: new Map([...noeuds].map(([id, n]) => [id, n.fils.slice()])),
+      p: new Map([...noeuds].map(([id, n]) => [id, n.parents.slice()])),
+      r: racines.slice(),
+      c: coLiens.map(co => ({ ...co })),
+    });
+    const revenir = e => {
+      noeuds.forEach(n => {
+        n.fils = e.f.get(n.id).slice();
+        n.parents = e.p.get(n.id).slice();
+      });
+      racines.length = 0;
+      racines.push(...e.r);
+      coLiens.forEach((co, i) => Object.assign(co, e.c[i]));
+      majPere();
+    };
+
+    // 1. Les lignées reliées forment une suite contiguë ; celle qui en relie
+    //    plusieurs se place au milieu, jamais à un bout.
+    const ordonnerLignees = miroir => {
+      majVoisinage();
+      if (!voisinage.size) return;
+      const places = new Set(), suite = [];
+      const deployer = (r, venantDe) => {
+        places.add(r);
+        const liens = [...(voisinage.get(r) || VIDE)].filter(v => v !== venantDe && !places.has(v)).sort(ordre);
+        const coupe = Math.floor(liens.length / 2);
+        const cote = l => l.flatMap(v => places.has(v) ? [] : deployer(v, r));
+        const gauche = cote(liens.slice(0, coupe));
+        return [...gauche, r, ...cote(liens.slice(coupe))];
+      };
+      racines.forEach(r => {
+        if (places.has(r)) return;
+        if (!voisinage.has(r)) { places.add(r); suite.push(r); return; }
+        const groupe = new Set([r]), pile = [r];
+        while (pile.length) {
+          const cur = pile.pop();
+          voisinage.get(cur).forEach(v => { if (!groupe.has(v)) { groupe.add(v); pile.push(v); } });
+        }
+        let pivot = r;                            // la lignée la plus reliée
+        groupe.forEach(v => { if (voisinage.get(v).size > voisinage.get(pivot).size) pivot = v; });
+        const bloc = deployer(pivot, null);
+        suite.push(...(miroir ? bloc.reverse() : bloc));
+      });
+      racines.length = 0;
+      racines.push(...suite);
+    };
+
+    // 2. Les deux branches glissent chacune vers le bord qui regarde l'autre.
+    const tourner = (co, versLaDroite) => {
+      const ca = chemin(co.second), cb = chemin(co.enfant);
+      if (ca.includes(co.enfant) || cb.includes(co.second)) return;  // l'un descend de l'autre
+      let k = 0;
+      while (k < ca.length && k < cb.length && ca[k] === cb[k]) k++;
+      if (k >= ca.length || k >= cb.length) return;
+      const pousser = (c, auBout) => {
+        for (let i = k; i < c.length - 1; i++) {
+          const f = noeuds.get(c[i]).fils, j = f.indexOf(c[i + 1]);
+          if (j < 0) continue;
+          f.splice(j, 1);
+          if (auBout) f.push(c[i + 1]); else f.unshift(c[i + 1]);
+        }
+      };
+      pousser(ca, versLaDroite);
+      pousser(cb, !versLaDroite);
+    };
+
+    // 3. Quand les deux parrains se disputent la même branche, on laisse l'autre
+    //    parrain porter la lignée. Les deux restent parrains : seule change la
+    //    branche sous laquelle le filleul est dessiné.
+    const basculer = co => {
+      if (descendDe(co.second, co.enfant)) return false;   // créerait un cycle
+      const ancien = noeuds.get(co.porteur), nouveau = noeuds.get(co.second);
+      if (!ancien || !nouveau) return false;
+      const i = ancien.fils.indexOf(co.enfant);
+      if (i < 0) return false;
+      ancien.fils.splice(i, 1);
+      nouveau.fils.push(co.enfant);
+      nouveau.fils.sort(ordre);
+      const n = noeuds.get(co.enfant);
+      n.parents = [co.second, co.porteur, ...n.parents.slice(2)];
+      const t = co.porteur; co.porteur = co.second; co.second = t;
+      majPere();
+      return true;
+    };
+
+    // 4. Le filleul quitte la branche de son porteur et vient se placer entre
+    //    ses deux parrains, rattaché à leur ancêtre commun — ou entre les deux
+    //    lignées quand il n'y en a pas. C'est le Y symétrique : deux courbes
+    //    identiques qui convergent sur sa carte.
+    const ponter = co => {
+      const ca = chemin(co.porteur), cb = chemin(co.second);
+      let k = 0;
+      while (k < ca.length && k < cb.length && ca[k] === cb[k]) k++;
+      if (k >= ca.length || k >= cb.length) return false;   // l'un descend de l'autre
+      const ancien = noeuds.get(co.porteur);
+      const i = ancien.fils.indexOf(co.enfant);
+      if (i < 0) return false;
+
+      const liste = k > 0 ? noeuds.get(ca[k - 1]).fils : racines;
+      if (liste === ancien.fils) return false;              // rien à gagner
+      const ia = liste.indexOf(ca[k]), ib = liste.indexOf(cb[k]);
+      if (ia < 0 || ib < 0) return false;
+
+      ancien.fils.splice(i, 1);
+      liste.splice(Math.max(ia, ib), 0, co.enfant);
+      if (k > 0) pere.set(co.enfant, ca[k - 1]); else pere.delete(co.enfant);
+      co.pont = true;
+      majPere();
+      if (k === 0 && !racines.includes(co.enfant)) racines.push(co.enfant);
+      return true;
+    };
+
+    // ---- Recherche de la meilleure disposition ----
+    // Chaque double parrainage n'offre que quelques vrais choix : de quel côté
+    // la branche se tourne, et comment le filleul est rattaché — sous le parrain
+    // cité en premier, sous l'autre, ou entre les deux.
+    const n = coLiens.length;
+
+    // appliquer(rattachements[], cotes[]) : repart de zéro et pose la disposition
+    const appliquer = (miroir, inverse, quoi, cotes) => {
+      revenir(depart);
+      for (let i = 0; i < n; i++) {
+        if (quoi[i] === 1 && PERMUTER_PARRAIN_PORTEUR && !basculer(coLiens[i])) return false;
+        if (quoi[i] === 2 && !ponter(coLiens[i])) return false;
+      }
+      ordonnerLignees(miroir);
+      const suite = coLiens.map((co, i) => [co, cotes[i]]);
+      if (inverse) suite.reverse();
+      suite.forEach(([co, droite]) => { if (!co.pont) tourner(co, droite); });
+      return true;
+    };
+
+    const depart = copier();
+    majVoisinage();
+    let meilleur = cout(), etat = copier();
+    const essayer = (miroir, inverse, quoi, cotes) => {
+      if (!appliquer(miroir, inverse, quoi, cotes)) return false;
+      const c = cout();
+      if (c < meilleur - 1e-6) { meilleur = c; etat = copier(); return true; }
+      return false;
+    };
+
+    if (n <= 4) {
+      // Peu de cas : on essaie vraiment tout et on garde le meilleur.
+      const puissance = (b, e) => { let v = 1; for (let i = 0; i < e; i++) v *= b; return v; };
+      const rattachements = PERMUTER_PARRAIN_PORTEUR ? 3 : 2;
+      for (const miroir of [false, true]) {
+        for (const inverse of [false, true]) {
+          for (let choix = 0; choix < puissance(rattachements, n); choix++) {
+            for (let cotes = 0; cotes < (1 << n); cotes++) {
+              essayer(miroir, inverse,
+                coLiens.map((_, i) => Math.floor(choix / puissance(rattachements, i)) % rattachements),
+                coLiens.map((_, i) => ((cotes >> i) & 1) === 1));
+            }
+          }
+        }
+      }
+    } else {
+      // Beaucoup de cas : on améliore un double parrainage à la fois, plusieurs
+      // fois de suite. Moins bon qu'un examen complet, mais instantané — et le
+      // tracé sait de toute façon gérer les liens qui restent longs.
+      let quoi = coLiens.map(() => 0), cotes = coLiens.map(() => true);
+      let miroir = false, inverse = false;
+      for (const m of [false, true]) {
+        const c = appliquer(m, false, quoi, cotes) ? cout() : Infinity;
+        if (c < meilleur - 1e-6) { meilleur = c; etat = copier(); miroir = m; }
+      }
+      for (let passe = 0; passe < 3; passe++) {
+        let gagne = false;
+        for (let i = 0; i < n; i++) {
+          const memeQuoi = quoi[i], memeCote = cotes[i];
+          let bon = null;
+          for (const q of (PERMUTER_PARRAIN_PORTEUR ? [0, 1, 2] : [0, 2])) {
+            for (const d of [false, true]) {
+              quoi[i] = q; cotes[i] = d;
+              if (essayer(miroir, inverse, quoi, cotes)) bon = [q, d];
+            }
+          }
+          if (bon) { quoi[i] = bon[0]; cotes[i] = bon[1]; gagne = true; }
+          else { quoi[i] = memeQuoi; cotes[i] = memeCote; }
+        }
+        if (!gagne) break;
+      }
+    }
+
+    revenir(etat);
+    majVoisinage();
+    placerTout();
   }
 
   // ============================================================
@@ -299,12 +587,36 @@
       bouts.push(`<line class="regle" x1="${monde.x0}" y1="${y}" x2="${monde.x1}" y2="${y}" vector-effect="non-scaling-stroke"/>`);
     });
     bouts.push("</g><g id='liens'>");
+    const reperes = new Map();
 
+    // Deux parrains se dessinent comme deux fillots, en miroir : mêmes courbes,
+    // convergeant vers le haut de la carte au lieu de s'ouvrir vers le bas.
     noeuds.forEach(n => n.parents.forEach((pid, i) => {
       const p = noeuds.get(pid);
       if (!p) return;
-      const y1 = p.y + L.hauteur / 2, y2 = n.y - L.hauteur / 2, dy = (y2 - y1) * 0.45;
-      bouts.push(`<path class="lien${i > 0 ? " co" : ""}" d="M${p.px},${y1}C${p.px},${y1 + dy} ${n.px},${y2 - dy} ${n.px},${y2}" data-p="${pid}" data-c="${n.id}" vector-effect="non-scaling-stroke"/>`);
+      const y1 = p.y + L.hauteur / 2, y2 = n.y - L.hauteur / 2;
+      const dx = Math.abs(p.px - n.px);
+      const large = dx > LIEN_TROP_LONG * PAS_X;
+      const horsVue = dx > LIEN_HORS_VUE * PAS_X;
+      if (horsVue) reperes.set(n.id, { nom: p.nom, promo: p.promo, sens: p.px > n.px ? 1 : -1 });
+      let d;
+      if (!large) {
+        const dy = (y2 - y1) * 0.45;
+        d = `M${p.px},${y1}C${p.px},${y1 + dy} ${n.px},${y2 - dy} ${n.px},${y2}`;
+      } else {
+        // Sur une longue distance, une courbe s'aplatit au point de ressembler
+        // aux lignes de promotion. On trace alors un vrai cheminement : une
+        // descente, un palier, une descente — deux coudes qui se lisent.
+        const sens = p.px > n.px ? -1 : 1;
+        const r = 12, palier = y1 + (y2 - y1) * 0.34;
+        d = `M${p.px},${y1}` +
+            `V${palier - r}` +
+            `Q${p.px},${palier} ${p.px + sens * r},${palier}` +
+            `H${n.px - sens * r}` +
+            `Q${n.px},${palier} ${n.px},${palier + r}` +
+            `V${y2}`;
+      }
+      bouts.push(`<path class="lien${large ? " chemine" : ""}${horsVue ? " hors-vue" : ""}" d="${d}" data-p="${pid}" data-c="${n.id}" vector-effect="non-scaling-stroke"/>`);
     }));
 
     bouts.push("</g><g id='noeuds'>");
@@ -317,7 +629,11 @@
         `<rect class="barrette" x="${x + 1}" y="${y + 8}" width="3" height="${L.hauteur - 16}" rx="1.5"/>` +
         `<text x="${x + 13}" y="${n.y}">${echapper(tronquer(n.nom, largeurNom))}</text>` +
         `<text class="an" x="${x + L.largeur - 11}" y="${n.y}" text-anchor="end">${n.promo}</text>` +
-        `<title>${echapper(n.nom)} — promo ${n.promo}</title></g>`
+        (reperes.has(n.id) ? (() => {
+          const r = reperes.get(n.id), bx = n.px + r.sens * (L.largeur / 2 + 9);
+          return `<path class="repere" d="M${bx - 4 * r.sens},${n.y - 6} l${4 * r.sens},6 l${-4 * r.sens},6"/>` +
+                 `<title>${echapper(n.nom)} — aussi parrainé·e par ${echapper(r.nom)} (${r.promo}), trop loin pour être relié·e ici</title>`;
+        })() : `<title>${echapper(n.nom)} — promo ${n.promo}</title>`) + `</g>`
       );
     });
     bouts.push("</g>");

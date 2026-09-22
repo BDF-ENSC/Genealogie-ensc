@@ -19,8 +19,11 @@ Sinon, renseignez son `gid` dans `config.js`.
 | 42 | Marie Dupont | 37 | 2029 | ROUGE |
 
 - `id_parent = -1` : la personne ouvre une lignée.
-- `id_parent = 37;41` : deux parrains. Le premier porte la branche, le second
-  est relié en pointillés.
+- `id_parent = 37;41` : deux parrains. Le premier porte la branche ; le second
+  est relié par un trait identique, exactement comme deux fillots le sont à leur
+  parrain, mais en miroir. Pour que ces deux traits restent courts, l'arbre
+  réordonne lignées et branches afin d'amener les deux parrains côte à côte,
+  même quand ils viennent de lignées différentes.
 - Un `id` en double est renuméroté automatiquement.
 - Les noms contenant une virgule sont gérés correctement.
 
@@ -65,6 +68,13 @@ Tant que `gidPoints` vaut `null`, l'onglet Classement affiche ce mode d'emploi.
 
 Les ex æquo sont gérés : deux familles à égalité partagent la même place, et la
 suivante est décalée d'autant.
+
+## Le double parrainage
+
+Une personne peut avoir deux parrains : `id_parent = 37;41`. L'arbre réorganise
+alors ses branches pour que les deux parrains se retrouvent voisins, et trace
+les deux liens à l'identique. Le détail de la méthode et les réglages sont dans
+`DOUBLE-PARRAINAGE.md`.
 
 ## Navigation dans un arbre
 
@@ -114,12 +124,15 @@ CSV publié. Une ligne ajoutée n'apparaît donc pas instantanément.
 | `app.js` | lecture du Sheet, arbres, classement, statistiques |
 | `config.js` | **le seul fichier à modifier** : adresse du Sheet et identifiants d'onglets |
 | `robots.txt` | demande aux moteurs de recherche de ne pas indexer les noms |
+| `DOUBLE-PARRAINAGE.md` | comment l'arbre place les personnes à deux parrains |
 
 ## Réglages
 
 Dans `app.js`, l'objet `L` en haut du fichier règle la largeur des cartes,
-l'écart horizontal et la hauteur d'une génération. Les couleurs des familles
-sont dans `COULEURS` (`app.js`) et en haut de `style.css`.
+l'écart horizontal et la hauteur d'une génération. Juste en dessous,
+`LIEN_TROP_LONG`, `LIEN_HORS_VUE` et `PERMUTER_PARRAIN_PORTEUR` pilotent le
+double parrainage. Les couleurs des familles sont dans `COULEURS` (`app.js`)
+et en haut de `style.css`.
 
 ## Le point de fragilité
 

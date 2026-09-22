@@ -287,8 +287,20 @@ main { flex: 1 1 auto; position: relative; min-height: 0; }
 
 .regle { stroke: color-mix(in srgb, var(--fam) 22%, transparent); stroke-width: 1; }
 
-.lien { fill: none; stroke: color-mix(in srgb, var(--fam) 45%, #b9c0c7); stroke-width: 1.6; }
-.lien.co { stroke-dasharray: 3 4; opacity: .75; }
+.lien { fill: none; stroke: color-mix(in srgb, var(--fam) 45%, #b9c0c7); stroke-width: 1.6; stroke-linecap: round; }
+
+/* Quand les deux parrains restent éloignés, le lien est tracé en cheminement
+   plutôt qu'en courbe, et affirmé pour ne pas se confondre avec une ligne de
+   promotion. La carte du filleul porte un repère du côté du parrain lointain. */
+.lien.chemine { stroke: color-mix(in srgb, var(--fam) 62%, #b9c0c7); stroke-width: 1.7; }
+
+/* Au-delà, le trait est masqué et ne revient qu'à la sélection de la personne :
+   un chevron sur sa carte indique de quel côté se trouve l'autre parrain. */
+.lien.hors-vue { display: none; }
+#arbre.selection .lien.hors-vue.actif { display: inline; stroke-dasharray: 8 6; }
+.repere { fill: none; stroke: var(--fam); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: .65; }
+#arbre.loin .repere { display: none; }
+
 
 .noeud rect { fill: #fff; stroke: color-mix(in srgb, var(--fam) 35%, #cdd3d8); stroke-width: 1.2; rx: 8; }
 .noeud text { font-family: var(--texte); font-size: 13px; fill: var(--encre); dominant-baseline: middle; }
